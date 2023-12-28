@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,25 +14,24 @@ import (
 )
 
 func openBamReader(inf string) *bam.Reader {
+	slog.Info(fmt.Sprintf("input file: %#q\n", inf))
 	var r io.Reader
-	if inf == "" {
-		r = os.Stdin
-	} else if inf == "-" {
+	if inf == "" || inf == "-" {
+		slog.Info("read from `stdin`\n")
 		r = os.Stdin
 	} else {
 		f, err := os.Open(inf)
 		if err != nil {
-			slog.Error(fmt.Sprintf("could not open the input file %q\n", inf))
+			slog.Error(fmt.Sprintf("could not open the input file %#q\n", inf))
 			os.Exit(1)
 		}
 		ok, err := bgzf.HasEOF(f)
 		if err != nil {
-			slog.Error(err.Error())
-			slog.Error(fmt.Sprintf("invalid EOF in %q\n", inf))
+			slog.Error(fmt.Sprintf("invalid EOF in %#q\n", inf))
 			os.Exit(1)
 		}
 		if !ok {
-			slog.Error(fmt.Sprintf("file %q has no bgzf magic block", inf))
+			slog.Error(fmt.Sprintf("file %#q has no bgzf magic block", inf))
 			os.Exit(1)
 		}
 		r = f
@@ -42,6 +40,7 @@ func openBamReader(inf string) *bam.Reader {
 	br, err := bam.NewReader(r, 0)
 	if err != nil {
 		slog.Error(err.Error())
+		os.Exit(1)
 	}
 
 	return br
@@ -54,10 +53,15 @@ func getBamHeader(br *bam.Reader) *sam.Header {
 
 func sendBamRecord(br *bam.Reader, num uint, ch chan *sam.Record, wg *sync.WaitGroup) {
 	if num == 0 {
+		slog.Info("all reads will be used\n")
 		num = math.MaxUint
+	} else {
+		slog.Info(fmt.Sprintf("%d reads will be used\n", num))
 	}
+
 	var wg2 sync.WaitGroup
 	wg2.Add(1)
+	n := 0
 	go func(ch chan<- *sam.Record, wg2 *sync.WaitGroup) {
 		for i := uint(0); i < num; i++ {
 			rec, err := br.Read()
@@ -69,20 +73,22 @@ func sendBamRecord(br *bam.Reader, num uint, ch chan *sam.Record, wg *sync.WaitG
 				os.Exit(1)
 			}
 			ch <- rec
+			n++
 		}
 		wg2.Done()
 	}(ch, &wg2)
 	wg2.Wait()
+	slog.Info(fmt.Sprintf("read %d records\n", n))
 	close(ch)
 	wg.Done()
 }
 
 func writeRecordToBam(outf string, header *sam.Header, ch chan *sam.Record, wg *sync.WaitGroup) {
+	slog.Info(fmt.Sprintf("output file: %#q\n", outf))
 	var w io.Writer
 	var err error
-	if outf == "" {
-		slog.Error("no output file specified\n")
-	} else if outf == "-" {
+	if outf == "" || outf == "-" {
+		slog.Info("write to `stdout`\n")
 		w = os.Stdout
 	} else {
 		w, err = os.Create(outf)
@@ -99,6 +105,7 @@ func writeRecordToBam(outf string, header *sam.Header, ch chan *sam.Record, wg *
 
 	var wg2 sync.WaitGroup
 	wg2.Add(1)
+	n := 0
 	go func(bw *bam.Writer, ch chan *sam.Record) {
 		for rec := range ch {
 			err = bw.Write(rec)
@@ -106,19 +113,22 @@ func writeRecordToBam(outf string, header *sam.Header, ch chan *sam.Record, wg *
 				slog.Error(err.Error())
 				os.Exit(1)
 			}
+			n++
 		}
 		wg2.Done()
 	}(bw, ch)
 	wg2.Wait()
+	bw.Close()
+	slog.Info(fmt.Sprintf("wrote %v records\n", n))
 	wg.Done()
 }
 
 func writeRecordToSam(outf string, header *sam.Header, ch chan *sam.Record, wg *sync.WaitGroup) {
+	slog.Info(fmt.Sprintf("output file: %#q\n", outf))
 	var w io.Writer
 	var err error
-	if outf == "" {
-		slog.Error("no output file specified\n")
-	} else if outf == "-" {
+	if outf == "" || outf == "-" {
+		slog.Info("write to `stdout`\n")
 		w = os.Stdout
 	} else {
 		w, err = os.Create(outf)
@@ -128,8 +138,7 @@ func writeRecordToSam(outf string, header *sam.Header, ch chan *sam.Record, wg *
 		}
 		//defer w.Close()
 	}
-	bw := bufio.NewWriter(w)
-	sw, err := sam.NewWriter(bw, header, 0)
+	sw, err := sam.NewWriter(w, header, 0)
 	if err != nil {
 		slog.Error(err.Error())
 		os.Exit(1)
@@ -137,6 +146,7 @@ func writeRecordToSam(outf string, header *sam.Header, ch chan *sam.Record, wg *
 
 	var wg2 sync.WaitGroup
 	wg2.Add(1)
+	n := 0
 	go func(sw *sam.Writer, ch chan *sam.Record) {
 		for rec := range ch {
 			err = sw.Write(rec)
@@ -144,9 +154,11 @@ func writeRecordToSam(outf string, header *sam.Header, ch chan *sam.Record, wg *
 				slog.Error(err.Error())
 				os.Exit(1)
 			}
+			n++
 		}
 		wg2.Done()
 	}(sw, ch)
 	wg2.Wait()
+	slog.Info(fmt.Sprintf("wrote %v records\n", n))
 	wg.Done()
 }
