@@ -2,6 +2,7 @@ package main
 
 import (
 	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/biogo/hts/sam"
@@ -14,27 +15,34 @@ func cmdRemoveSoftClip() *cli.Command {
 		Usage: "remove soft clips from bam file",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:  "inbam",
-				Value: "",
-				Usage: "input bam file",
+				Name:    "inbam",
+				Aliases: []string{"i"},
+				Value:   "",
+				Usage:   "input bam file",
 			},
 			&cli.StringFlag{
-				Name:  "outbam",
-				Value: "",
-				Usage: "output bam file",
+				Name:    "outbam",
+				Aliases: []string{"o"},
+				Value:   "",
+				Usage:   "output bam file",
 			},
 		},
 		Action: func(c *cli.Context) error {
-			br := openBamReader(c.String("inbam"))
-			defer br.Close()
+			slog.Info("start rmsoftclip")
+
+			input := c.String("i")
+			output := c.String("o")
 			num := uint(0)
+
+			br := openBamReader(input)
+			defer br.Close()
 			h := getBamHeader(br)
 
 			// Prepare sam.Record Stream
 			ch := make(chan *sam.Record, 10000)
 			chRmSoftClip := make(chan *sam.Record, 10000)
 
-			// Data processing
+			// Processing
 			var wg sync.WaitGroup
 			wg.Add(3)
 			go sendBamRecord(br, num, ch, &wg)
@@ -45,8 +53,9 @@ func cmdRemoveSoftClip() *cli.Command {
 				wg.Done()
 				close(chOut)
 			}(ch, chRmSoftClip, &wg)
-			go writeRecordToBam(c.String("outbam"), h, chRmSoftClip, &wg)
+			go writeRecordToBam(output, h, chRmSoftClip, &wg)
 			wg.Wait()
+			slog.Info("rmsoftclip was succsessfully ended")
 			return nil
 		},
 	}
@@ -75,13 +84,15 @@ func removeSoftClip(rec *sam.Record) *sam.Record {
 	} else {
 		rs = 0
 	}
-	auxLS, err := sam.NewAux(tagLS, ls)
+	auxLS, err := sam.NewAux(tagLS, uint32(ls))
 	if err != nil {
 		slog.Error(err.Error())
+		os.Exit(1)
 	}
-	auxRS, err := sam.NewAux(tagRS, rs)
+	auxRS, err := sam.NewAux(tagRS, uint32(rs))
 	if err != nil {
 		slog.Error(err.Error())
+		os.Exit(1)
 	}
 
 	rec.Seq = sam.NewSeq(rec.Seq.Expand()[ls:(rec.Seq.Length - rs)])
